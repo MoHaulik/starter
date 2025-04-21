@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>WebXR AR Starter</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { margin: 0; overflow: hidden; font-family: sans-serif; }
+    #overlay {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      z-index: 1;
+    }
+    #start-button {
+      padding: 12px 24px;
+      font-size: 18px;
+      background: rgba(72, 118, 255, 0.8);
+      color: white;
+      border: none;
+      border-radius: 30px;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+    #start-button:hover {
+      background: rgba(72, 118, 255, 1);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 12px rgba(0,0,0,0.3);
+    }
+  </style>
+</head>
+<body>
+  <div id="overlay">
+    <button id="start-button">Start AR Experience</button>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'https://unpkg.com/three@0.150.1/build/three.module.js';
+    import { ARButton } from 'https://unpkg.com/three@0.150.1/examples/jsm/webxr/ARButton.js';
+    import { XRControllerModelFactory } from 'https://unpkg.com/three@0.150.1/examples/jsm/webxr/XRControllerModelFactory.js';
+
+    let camera, scene, renderer, controller, reticle, cube;
+
+    init();
+
+    function init() {
+      scene = new THREE.Scene();
+
+      camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.xr.enabled = true;
+      document.body.appendChild(renderer.domElement);
+
+      const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
+      light.position.set(0.5, 1, 0.25);
+      scene.add(light);
+
+      cube = new THREE.Mesh(
+        new THREE.BoxGeometry(0.2, 0.2, 0.2),
+        new THREE.MeshPhongMaterial({ color: 0x00ff88 })
+      );
+      cube.visible = false;
+      scene.add(cube);
+
+      const controllerModelFactory = new XRControllerModelFactory();
+      controller = renderer.xr.getController(0);
+      scene.add(controller);
+
+      const controllerGrip = renderer.xr.getControllerGrip(0);
+      controllerGrip.add(controllerModelFactory.createControllerModel(controllerGrip));
+      scene.add(controllerGrip);
+
+      controller.addEventListener('selectstart', onSelectStart);
+      controller.addEventListener('selectend', onSelectEnd);
+
+      document.getElementById('start-button').addEventListener('click', () => {
+        navigator.xr.requestSession('immersive-ar', {
+          requiredFeatures: ['hit-test'],
+          optionalFeatures: ['dom-overlay'],
+          domOverlay: { root: document.body }
+        }).then(session => {
+          renderer.xr.setSession(session);
+          document.getElementById('overlay').style.display = 'none';
+          session.requestReferenceSpace('viewer').then(refSpace => {
+            const hitTestSource = session.requestHitTestSource({ space: refSpace });
+            renderer.setAnimationLoop((timestamp, frame) => {
+              if (frame) {
+                const refSpace = renderer.xr.getReferenceSpace();
+                const viewerPose = frame.getViewerPose(refSpace);
+                if (viewerPose && hitTestSource) {
+                  hitTestSource.then(source => {
+                    const hitTestResults = frame.getHitTestResults(source);
+                    if (hitTestResults.length) {
+                      const hit = hitTestResults[0];
+                      const pose = hit.getPose(refSpace);
+                      if (!cube.visible) {
+                        cube.visible = true;
+                        cube.position.set(pose.transform.position.x, pose.transform.position.y, pose.transform.position.z);
+                      }
+                    }
+                  });
+                }
+              }
+              renderer.render(scene, camera);
+            });
+          });
+        });
+      });
+    }
+
+    function onSelectStart() {
+      controller.userData.selected = true;
+    }
+
+    function onSelectEnd() {
+      controller.userData.selected = false;
+    }
+
+    renderer.setAnimationLoop(() => {
+      if (controller.userData.selected && cube.visible) {
+        const position = new THREE.Vector3();
+        controller.getWorldPosition(position);
+        cube.position.copy(position);
+      }
+    });
+  </script>
+</body>
+</html>
