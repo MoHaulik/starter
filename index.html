@@ -2,10 +2,16 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>WebXR AR Starter</title>
+  <title>WebXR AR Grabbable Cube</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
   <style>
-    body { margin: 0; overflow: hidden; font-family: sans-serif; }
+    body { 
+      margin: 0; 
+      overflow: hidden;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
     #overlay {
       position: absolute;
       top: 20px;
@@ -28,104 +34,224 @@
       transform: translateY(-2px);
       box-shadow: 0 6px 12px rgba(0,0,0,0.3);
     }
+    #status {
+      margin-top: 15px;
+      font-size: 16px;
+      background: rgba(0, 0, 0, 0.5);
+      color: white;
+      padding: 10px 15px;
+      border-radius: 12px;
+      display: none;
+      backdrop-filter: blur(5px);
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
   </style>
 </head>
 <body>
   <div id="overlay">
     <button id="start-button">Start AR Experience</button>
+    <div id="status"></div>
   </div>
-
+  
   <script type="module">
     import * as THREE from 'https://unpkg.com/three@0.150.1/build/three.module.js';
     import { ARButton } from 'https://unpkg.com/three@0.150.1/examples/jsm/webxr/ARButton.js';
-    import { XRControllerModelFactory } from 'https://unpkg.com/three@0.150.1/examples/jsm/webxr/XRControllerModelFactory.js';
 
-    let camera, scene, renderer, controller, reticle, cube;
-
+    let camera, scene, renderer;
+    let controller;
+    let grabCube = null;
+    let isGrabbing = false;
+    let grabOffset = new THREE.Vector3();
+    let clock = new THREE.Clock();
+    
     init();
 
     function init() {
+      // Scene setup
       scene = new THREE.Scene();
-
       camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
 
+      // Renderer setup
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
       renderer.setSize(window.innerWidth, window.innerHeight);
       renderer.xr.enabled = true;
+      renderer.setClearColor(0x000000, 0);
+      renderer.shadowMap.enabled = true;
       document.body.appendChild(renderer.domElement);
 
-      const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
-      light.position.set(0.5, 1, 0.25);
-      scene.add(light);
+      // Lighting
+      const ambientLight = new THREE.AmbientLight(0x404040, 2);
+      scene.add(ambientLight);
 
-      cube = new THREE.Mesh(
-        new THREE.BoxGeometry(0.2, 0.2, 0.2),
-        new THREE.MeshPhongMaterial({ color: 0x00ff88 })
-      );
-      cube.visible = false;
-      scene.add(cube);
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
+      directionalLight.position.set(1, 1, 1);
+      directionalLight.castShadow = true;
+      scene.add(directionalLight);
 
-      const controllerModelFactory = new XRControllerModelFactory();
-      controller = renderer.xr.getController(0);
-      scene.add(controller);
-
-      const controllerGrip = renderer.xr.getControllerGrip(0);
-      controllerGrip.add(controllerModelFactory.createControllerModel(controllerGrip));
-      scene.add(controllerGrip);
-
-      controller.addEventListener('selectstart', onSelectStart);
-      controller.addEventListener('selectend', onSelectEnd);
-
+      // Start button event
       document.getElementById('start-button').addEventListener('click', () => {
-        navigator.xr.requestSession('immersive-ar', {
-          requiredFeatures: ['hit-test'],
-          optionalFeatures: ['dom-overlay'],
-          domOverlay: { root: document.body }
-        }).then(session => {
-          renderer.xr.setSession(session);
-          document.getElementById('overlay').style.display = 'none';
-          session.requestReferenceSpace('viewer').then(refSpace => {
-            const hitTestSource = session.requestHitTestSource({ space: refSpace });
-            renderer.setAnimationLoop((timestamp, frame) => {
-              if (frame) {
-                const refSpace = renderer.xr.getReferenceSpace();
-                const viewerPose = frame.getViewerPose(refSpace);
-                if (viewerPose && hitTestSource) {
-                  hitTestSource.then(source => {
-                    const hitTestResults = frame.getHitTestResults(source);
-                    if (hitTestResults.length) {
-                      const hit = hitTestResults[0];
-                      const pose = hit.getPose(refSpace);
-                      if (!cube.visible) {
-                        cube.visible = true;
-                        cube.position.set(pose.transform.position.x, pose.transform.position.y, pose.transform.position.z);
-                      }
-                    }
-                  });
-                }
-              }
-              renderer.render(scene, camera);
-            });
+        if (navigator.xr) {
+          navigator.xr.isSessionSupported('immersive-ar').then((supported) => {
+            if (supported) {
+              const sessionInit = { 
+                requiredFeatures: ['hit-test'],
+                optionalFeatures: ['dom-overlay'], 
+                domOverlay: { root: document.body } 
+              };
+              navigator.xr.requestSession('immersive-ar', sessionInit).then(onSessionStarted);
+            } else {
+              updateStatus('WebXR AR session is not supported on this device.');
+            }
           });
-        });
+        } else {
+          updateStatus('WebXR is not supported in this browser.');
+        }
       });
+
+      // Handle window resize
+      window.addEventListener('resize', onWindowResize);
     }
 
-    function onSelectStart() {
-      controller.userData.selected = true;
+    function updateStatus(message) {
+      const statusElement = document.getElementById('status');
+      statusElement.style.display = 'block';
+      statusElement.textContent = message;
     }
 
-    function onSelectEnd() {
-      controller.userData.selected = false;
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
     }
 
-    renderer.setAnimationLoop(() => {
-      if (controller.userData.selected && cube.visible) {
-        const position = new THREE.Vector3();
-        controller.getWorldPosition(position);
-        cube.position.copy(position);
+    function onSessionStarted(session) {
+      // Set up XR session
+      renderer.xr.setReferenceSpaceType('local');
+      renderer.xr.setSession(session);
+      
+      // Hide button and show status
+      document.getElementById('start-button').style.display = 'none';
+      updateStatus('Looking for surface...');
+
+      // Create the grabbable cube
+      createGrabbableCube();
+      
+      // Set up controller
+      setupController(session);
+
+      // Start animation loop
+      renderer.setAnimationLoop(render);
+
+      // Handle session end
+      session.addEventListener('end', onSessionEnd);
+    }
+
+    function onSessionEnd() {
+      updateStatus('AR session ended');
+      document.getElementById('start-button').style.display = 'block';
+    }
+
+    function createGrabbableCube() {
+      // Create a colorful cube
+      const geometry = new THREE.BoxGeometry(0.1, 0.1, 0.1);
+      const material = new THREE.MeshStandardMaterial({
+        color: 0x4876FF,
+        metalness: 0.3,
+        roughness: 0.4,
+      });
+      grabCube = new THREE.Mesh(geometry, material);
+      grabCube.position.set(0, 0, -0.5); // Position in front of the camera
+      grabCube.castShadow = true;
+      grabCube.receiveShadow = true;
+      scene.add(grabCube);
+      
+      updateStatus('Cube created! Point your controller at it and squeeze to grab.');
+    }
+
+    function setupController(session) {
+      // Create controller
+      controller = renderer.xr.getController(0);
+      controller.addEventListener('connected', (event) => {
+        const xrInputSource = event.data;
+        updateStatus(`Controller connected: ${xrInputSource.handedness}`);
+      });
+      
+      // Handle squeeze events for grabbing
+      controller.addEventListener('squeezestart', onSqueezeStart);
+      controller.addEventListener('squeezeend', onSqueezeEnd);
+      
+      scene.add(controller);
+      
+      // Add a visual for the controller
+      const controllerGeometry = new THREE.CylinderGeometry(0.01, 0.02, 0.1, 16);
+      const controllerMaterial = new THREE.MeshStandardMaterial({
+        color: 0xFF4500,
+        roughness: 0.3,
+        metalness: 0.5
+      });
+      const controllerMesh = new THREE.Mesh(controllerGeometry, controllerMaterial);
+      controllerMesh.rotation.x = Math.PI / 2;
+      controller.add(controllerMesh);
+    }
+
+    function onSqueezeStart() {
+      if (!grabCube) return;
+      
+      // Check if controller is close enough to grab the cube
+      const controllerWorldPosition = new THREE.Vector3();
+      controller.getWorldPosition(controllerWorldPosition);
+      
+      const distance = controllerWorldPosition.distanceTo(grabCube.position);
+      
+      if (distance < 0.3) { // Grab if within 30cm
+        isGrabbing = true;
+        
+        // Calculate and store the offset between controller and cube
+        grabOffset.copy(grabCube.position).sub(controllerWorldPosition);
+        
+        // Visual feedback
+        grabCube.material.emissive.set(0x00ff00);
+        grabCube.material.emissiveIntensity = 0.5;
+        
+        updateStatus('Grabbed! Move the controller to reposition the cube.');
       }
-    });
+    }
+
+    function onSqueezeEnd() {
+      if (isGrabbing) {
+        isGrabbing = false;
+        
+        // Reset visual feedback
+        grabCube.material.emissive.set(0x000000);
+        grabCube.material.emissiveIntensity = 0;
+        
+        updateStatus('Released! Point at cube and squeeze to grab again.');
+      }
+    }
+
+    function render(timestamp, frame) {
+      if (frame) {
+        const referenceSpace = renderer.xr.getReferenceSpace();
+        const session = renderer.xr.getSession();
+        
+        if (isGrabbing && grabCube) {
+          // Update cube position to follow controller
+          const controllerWorldPosition = new THREE.Vector3();
+          controller.getWorldPosition(controllerWorldPosition);
+          
+          grabCube.position.copy(controllerWorldPosition).add(grabOffset);
+          
+          // Add a little rotation for visual feedback
+          grabCube.rotation.x += 0.01;
+          grabCube.rotation.y += 0.01;
+        } else if (grabCube) {
+          // Gentle idle rotation
+          grabCube.rotation.y += 0.005;
+        }
+      }
+      
+      renderer.render(scene, camera);
+    }
   </script>
 </body>
 </html>
